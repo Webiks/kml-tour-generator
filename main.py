@@ -1,7 +1,10 @@
 import math
+import json
 
 import simplekml
 import pymap3d
+
+from klv_frame import get_klv_frame
 
 # target: lat, lon, alt
 # route mode: manual route or circle
@@ -85,7 +88,32 @@ def add_camera_points(playlist, circle_points, target, horizontal_fov, leg_durat
             flyto.camera.gxhorizfov = horizontal_fov
 
 
-def create_tour(name, output_path):
+def generate_kml(name, origin, target, circle_points, output_options, horizontal_fov, leg_duration_sec, loops):
+    kml = simplekml.Kml(name=name, open=1)
+    tour = kml.newgxtour(name=name)
+    playlist = tour.newgxplaylist()
+
+    if output_options['target']:
+        kml.newpoint(name=f"target(alt={target['alt']})", altitudemode='absolute', coords=[(target['lon'], target['lat'], target['alt'])])
+    if output_options['origin']:
+        kml.newpoint(name="origin", altitudemode='absolute', coords=[(origin['lon'], origin['lat'], origin['alt'])])
+    if output_options['route']:
+        route_points = circle_points + [circle_points[0]] # close route
+        kml.newlinestring(name='route', altitudemode='absolute', coords=list(generate_coords(route_points)))
+    
+    add_camera_points(playlist, circle_points, target, horizontal_fov, leg_duration_sec, loops)
+
+    kml.save(name + '.kml')
+
+
+def generate_klv(name, origin, target, circle_points, output_options, horizontal_fov, leg_duration_sec, loops):
+    klv = { 'test': [1, 2, 3] }
+
+    with open(name + '_klv.json', 'w') as output:
+        json.dump(klv, output)
+
+
+def create_tour(name):
     # inputs: # TODO get inputs from command line/file
     target = { 'lat': 32.813580, 'lon': 34.983984, 'alt': 221 }
     origin_offset = { 'az': -90, 'el': 30, 'srange': 1500 }
@@ -102,25 +130,14 @@ def create_tour(name, output_path):
     circle_points = list(calculate_circle_points(circle_center, radius_deg,
         start_angle=origin_offset['az'], steps=circle_steps))
     
-    kml = simplekml.Kml(name=name, open=1)
-    tour = kml.newgxtour(name=name)
-    playlist = tour.newgxplaylist()
-
-    if output_options['target']:
-        kml.newpoint(name=f"target(alt={target['alt']})", altitudemode='absolute', coords=[(target['lon'], target['lat'], target['alt'])])
-    if output_options['origin']:
-        kml.newpoint(name="origin", altitudemode='absolute', coords=[(origin['lon'], origin['lat'], origin['alt'])])
-    if output_options['route']:
-        route_points = circle_points + [circle_points[0]] # close route
-        kml.newlinestring(name='route', altitudemode='absolute', coords=list(generate_coords(route_points)))
-    
-    add_camera_points(playlist, circle_points, target, horizontal_fov, leg_duration_sec, loops)
-
-    # TODO generate KLV as well?
-    kml.save(output_path)
+    # output
+    generate_kml(name, origin, target, circle_points, output_options,
+        horizontal_fov, leg_duration_sec, loops)
+    generate_klv(name, origin, target, circle_points, output_options,
+        horizontal_fov, leg_duration_sec, loops)
 
 
-def create_line_tour(name, output_path):
+def create_line_tour(name):
     kml = simplekml.Kml(name=name, open=1)
     tour = kml.newgxtour(name=name)
     playlist = tour.newgxplaylist()
@@ -138,7 +155,7 @@ def create_line_tour(name, output_path):
         flyto.camera.roll = 0
         # playlist.newgxwait(gxduration=0)
 
-    kml.save(output_path)
+    kml.save(name + '.kml')
 
 
 def create_test_tour(output_path = 'test.kml'):
@@ -170,4 +187,4 @@ def create_test_tour(output_path = 'test.kml'):
     kml.save(output_path)
 
 if __name__ == '__main__':
-    create_tour(name='test2', output_path='test2.kml')
+    create_tour(name='test2')
