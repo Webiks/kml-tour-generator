@@ -1,5 +1,6 @@
 import math
 import json
+from datetime import datetime, timedelta
 
 import simplekml
 import pymap3d
@@ -22,6 +23,8 @@ from klv_frame import get_klv_frame
 #   - calculate azimuth, elevation, roll=0 from point to target
 # - create tour file including target pinpoint (text = target position)
 # MVP: circle + az/el/srange input
+
+# TODO refactor to files
 
 
 def create_start_point(origin_offset, target):
@@ -67,25 +70,79 @@ def generate_coords(points):
         yield (point['lon'], point['lat'], point['alt'])
 
 
+def add_camera_point(point, target, horizontal_fov, playlist, duration):
+    aer = calculate_aer(point, target)
+    
+    flyto = playlist.newgxflyto(gxduration=duration)
+    flyto.gxflytomode = 'smooth'
+    flyto.camera.longitude = point['lon']
+    flyto.camera.latitude = point['lat']
+    flyto.camera.altitude = point['alt']
+    flyto.camera.altitudemode = 'absolute'
+    flyto.camera.heading = aer['az']
+    flyto.camera.tilt = aer['el'] + 90 # from [-90,90] to [0,180]
+    flyto.camera.roll = 0
+    flyto.camera.gxhorizfov = horizontal_fov
+
+
+def calculate_geo_point(point, az, el, srange):
+    target = pymap3d.aer2geodetic(az, el, srange,
+        point['lat'], point['lon'], point['alt'])
+    return { 'lat': target[0], 'lon': target[1], 'alt': target[2] }
+
+
+def generate_klv_frame(point, target, next_point, horizontal_fov, time, base_time, video_ratio):
+    base_pts = 126000
+    timestamp = base_time + timedelta(seconds=time)
+    aer_next = calculate_aer(point, next_point)
+    aer_target = calculate_aer(point, target)
+
+    vertical_fov = horizontal_fov / video_ratio
+    half_hfov = horizontal_fov / 2
+    half_vfov = vertical_fov / 2
+    point1 = calculate_geo_point(point, aer_target['az'] + half_hfov, aer_target['el'] + half_vfov, aer_target['srange'])
+    point2 = calculate_geo_point(point, aer_target['az'] - half_hfov, aer_target['el'] + half_vfov, aer_target['srange'])
+    point3 = calculate_geo_point(point, aer_target['az'] - half_hfov, aer_target['el'] - half_vfov, aer_target['srange'])
+    point4 = calculate_geo_point(point, aer_target['az'] + half_hfov, aer_target['el'] - half_vfov, aer_target['srange'])
+
+    frame = get_klv_frame()
+    frame['pts'] = base_pts + (time * 90000) # 90khz clock
+    frame['precision_time_stamp'] = timestamp.isoformat()
+    frame['platform_heading_angle'] = aer_next['az']
+    frame['platform_pitch_angle'] = 0
+    frame['platform_roll_angle'] = 0
+    frame['sensor_latitude'] = point['lat']
+    frame['sensor_longitude'] = point['lon']
+    frame['sensor_true_altitude'] = point['alt']
+    frame['sensor_horizontal_field_of_view'] = horizontal_fov
+    frame['sensor_vertical_field_of_view'] = vertical_fov
+    frame['sensor_relative_azimuth_angle'] = aer_target['az'] - aer_next['az'] # TODO validate!
+    frame['sensor_relative_elevation_angle'] = aer_target['el']
+    frame['sensor_relative_roll_angle'] = 0
+    frame['slant_range'] = aer_target['srange']
+    frame['frame_center_latitude'] = target['lat']
+    frame['frame_center_longitude'] = target['lon']
+    frame['frame_center_elevation'] = target['alt']
+    frame['offset_corner_latitude_point_1'] = target['lat'] - point1['lat']
+    frame['offset_corner_longitude_point_1'] = target['lon'] - point1['lon']
+    frame['offset_corner_latitude_point_2'] = target['lat'] - point2['lat']
+    frame['offset_corner_longitude_point_2'] = target['lon'] - point2['lon']
+    frame['offset_corner_latitude_point_3'] = target['lat'] - point3['lat']
+    frame['offset_corner_longitude_point_3'] = target['lon'] - point3['lon']
+    frame['offset_corner_latitude_point_4'] = target['lat'] - point4['lat']
+    frame['offset_corner_longitude_point_4'] = target['lon'] - point4['lon']
+    frame['sensor_geoid_height'] = 0
+    frame['frame_center_geoid_height'] = 0
+    return frame
+
+
 def add_camera_points(playlist, circle_points, target, horizontal_fov, leg_duration_sec, loops):
     duration = 0
-    count = len(circle_points)
     for i in range(loops):
-        for j in range(count):
+        for j, point in enumerate(circle_points):
             duration = 0 if i == 0 and j == 0 else leg_duration_sec
-            point = circle_points[j]
-            aer = calculate_aer(point, target)
-
-            flyto = playlist.newgxflyto(gxduration=duration)
-            flyto.gxflytomode = 'smooth'
-            flyto.camera.longitude = point['lon']
-            flyto.camera.latitude = point['lat']
-            flyto.camera.altitude = point['alt']
-            flyto.camera.altitudemode = 'absolute'
-            flyto.camera.heading = aer['az']
-            flyto.camera.tilt = aer['el'] + 90 # from [-90,90] to [0,180]
-            flyto.camera.roll = 0
-            flyto.camera.gxhorizfov = horizontal_fov
+            add_camera_point(point, target, horizontal_fov, playlist, duration)
+    add_camera_point(circle_points[0], target, horizontal_fov, playlist, leg_duration_sec) # close the loop
 
 
 def generate_kml(name, origin, target, circle_points, output_options, horizontal_fov, leg_duration_sec, loops):
@@ -106,8 +163,25 @@ def generate_kml(name, origin, target, circle_points, output_options, horizontal
     kml.save(name + '.kml')
 
 
-def generate_klv(name, origin, target, circle_points, output_options, horizontal_fov, leg_duration_sec, loops):
-    klv = { 'test': [1, 2, 3] }
+def generate_klv(name, origin, target, circle_points, output_options, 
+    horizontal_fov, leg_duration_sec, loops, base_time, video_ratio):
+    klv = []
+
+    count = len(circle_points)
+    time = 0
+    for i in range(loops):
+        for j, point in enumerate(circle_points):
+            time = ((i * count) + j) * leg_duration_sec
+            next_point = circle_points[(j + 1) % count]
+            klv_frame = generate_klv_frame(point, target, next_point,
+                horizontal_fov, time, base_time, video_ratio)
+            klv.append(klv_frame)
+    
+    # close the circle
+    time = loops * count * leg_duration_sec
+    klv_frame = generate_klv_frame(circle_points[0], target, circle_points[1],
+        horizontal_fov, time, base_time, video_ratio)
+    klv.append(klv_frame)
 
     with open(name + '_klv.json', 'w') as output:
         json.dump(klv, output)
@@ -119,9 +193,11 @@ def create_tour(name):
     origin_offset = { 'az': -90, 'el': 30, 'srange': 1500 }
     circle_steps = 360 # TODO combine options to dictionary
     leg_duration_sec = 0.1
-    loops = 1
+    loops = 2
     horizontal_fov = 5
-    output_options = { 'origin': True, 'target': True, 'route': True }
+    output_options = { 'origin': True, 'target': True, 'route': True, 'kml': True, 'klv': True }
+    base_time = datetime(2020, 2, 19, 10, 0, 0)
+    video_ratio = 4.0 / 3
 
     # calculations
     origin = create_start_point(origin_offset, target)
@@ -131,10 +207,12 @@ def create_tour(name):
         start_angle=origin_offset['az'], steps=circle_steps))
     
     # output
-    generate_kml(name, origin, target, circle_points, output_options,
-        horizontal_fov, leg_duration_sec, loops)
-    generate_klv(name, origin, target, circle_points, output_options,
-        horizontal_fov, leg_duration_sec, loops)
+    if output_options['kml']:
+        generate_kml(name, origin, target, circle_points, output_options,
+            horizontal_fov, leg_duration_sec, loops)
+    if output_options['klv']:
+        generate_klv(name, origin, target, circle_points, output_options,
+            horizontal_fov, leg_duration_sec, loops, base_time, video_ratio)
 
 
 def create_line_tour(name):
