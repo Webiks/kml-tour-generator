@@ -189,8 +189,8 @@ def generate_klv(name, origin, target, circle_points, output_options,
 
 def create_tour(name):
     # inputs: # TODO get inputs from command line/file
-    target = { 'lat': 32.813580, 'lon': 34.983984, 'alt': 221 }
-    origin_offset = { 'az': -90, 'el': 30, 'srange': 1500 }
+    target = { 'lat': 32.701503, 'lon': 34.931722, 'alt': 0 }
+    origin_offset = { 'az': -90, 'el': 30, 'srange': 5500 }
     circle_steps = 360 # TODO combine options to dictionary
     leg_duration_sec = 0.1
     loops = 2
@@ -198,6 +198,7 @@ def create_tour(name):
     output_options = { 'origin': True, 'target': True, 'route': True, 'kml': True, 'klv': True }
     base_time = datetime(2020, 2, 19, 10, 0, 0)
     video_ratio = 4.0 / 3
+    kml_to_klv_horizontal_fov_factor = 2.0
 
     # calculations
     origin = create_start_point(origin_offset, target)
@@ -212,7 +213,8 @@ def create_tour(name):
             horizontal_fov, leg_duration_sec, loops)
     if output_options['klv']:
         generate_klv(name, origin, target, circle_points, output_options,
-            horizontal_fov, leg_duration_sec, loops, base_time, video_ratio)
+            horizontal_fov * kml_to_klv_horizontal_fov_factor, leg_duration_sec,
+            loops, base_time, video_ratio)
 
 
 def create_line_tour(name):
@@ -265,4 +267,5 @@ def create_test_tour(output_path = 'test.kml'):
     kml.save(output_path)
 
 if __name__ == '__main__':
-    create_tour(name='test2')
+    # TODO add command line arguments
+    create_tour(name='webiks_test3')
